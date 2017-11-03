@@ -15,6 +15,7 @@
 @property (nonatomic, strong) NSString *nricNumber;
 @property (nonatomic, strong) NSString *documentImageName;
 @property (nonatomic, strong) UIImage *documentImage;
+@property (nonatomic, strong) NSString *nricInfoName;
 
 @end
 
@@ -75,27 +76,24 @@
      */
     {
         self.documentImageName = @"DocumentImage";
+        self.nricInfoName = @"NricDocumentInfo";
 
         PPDecodingInfo *info = [[PPDecodingInfo alloc] initWithLocation:CGRectMake(0.0f, 0.0f, 1.0f, 1.0f) dewarpedHeight:700.f uniqueId:self.documentImageName];
+        PPDecodingInfo *nricInfo = [[PPDecodingInfo alloc] initWithLocation:CGRectMake(0.266f, 0.62f, 0.46f, 0.12f) dewarpedHeight:100.f uniqueId:self.nricInfoName];
 
-        /**
-         * Create ID card document specification. Document specification defines geometric/scanning properties of documents to be detected
-         */
+        /** Create ID card document specification. Document specification defines geometric/scanning properties of documents to be detected */
         PPDocumentSpecification *idSpec = [PPDocumentSpecification newFromPreset:PPDocumentPresetId1Card];
 
-        /**
-         * Set decoding infos as our classification decoding infos. One has location of document number on old id, other on new Id
-         */
-        [idSpec setDecodingInfo:@[info]];
+        /** Set decoding infos */
+        [idSpec setDecodingInfo:@[info, nricInfo]];
 
-        /**
-         * Wrap Document specification in detector settings
-         */
+        /** Wrap Document specification in detector settings */
         PPDocumentDetectorSettings *detectorSettings = [[PPDocumentDetectorSettings alloc] initWithNumStableDetectionsThreshold:4];
         [detectorSettings setDocumentSpecifications:@[ idSpec ]];
 
-
         PPDetectorRecognizerSettings *detectorRecognizerSettings = [[PPDetectorRecognizerSettings alloc] initWithDetectorSettings:detectorSettings];
+
+        [detectorRecognizerSettings addOcrParser:[self nricParserFactory] name:self.nricInfoName group:self.nricInfoName];
 
         /**
          * Add decoding infos for classifier results. These infos and their parsers will only be processed if classifier outputs the
@@ -104,24 +102,30 @@
         [settings.scanSettings addRecognizerSettings:detectorRecognizerSettings];
     }
 
-    /**********************************************************************************************************************/
-    /****************************************  BarcodeRecognizer ****************************************/
-    /**********************************************************************************************************************/
-
-    {
-        PPBarcodeRecognizerSettings *barcodeRecognizerSettings = [[PPBarcodeRecognizerSettings alloc] init];
-
-        barcodeRecognizerSettings.scanCode39 = YES;
-
-        [settings.scanSettings addRecognizerSettings:barcodeRecognizerSettings];
-    }
-
-
     /** 4. Initialize the Scanning Coordinator object */
 
     PPCameraCoordinator *coordinator = [[PPCameraCoordinator alloc] initWithSettings:settings delegate:nil];
 
     return coordinator;
+}
+
+- (PPOcrParserFactory *)nricParserFactory {
+    PPRegexOcrParserFactory *regexParserFactory = [[PPRegexOcrParserFactory alloc] initWithRegex:@"\\d{6}\\-\\d{2}\\-\\d{4}\\-\\d{2}\\-\\d{2}"];
+
+    PPOcrEngineOptions *options = [[PPOcrEngineOptions alloc] init];
+    options.minimalLineHeight = 30;
+
+    NSMutableSet<PPOcrCharKey *> *keys = [[NSMutableSet alloc] init];
+    for (unichar c = '0'; c <= '9'; c++) {
+        [keys addObject:[PPOcrCharKey keyWithCode:c font:PP_OCR_FONT_ANY]];
+    }
+	[keys addObject:[PPOcrCharKey keyWithCode:'-' font:PP_OCR_FONT_ANY]];
+
+    options.charWhitelist = keys;
+
+    [regexParserFactory setOptions:options];
+
+    return regexParserFactory;
 }
 
 - (IBAction)didTapScan:(id)sender {
@@ -186,38 +190,20 @@
     // first, pause scanning until we process all the results
     [scanningViewController pauseScanning];
 
-    NSString *message = nil;
-    NSString *title = nil;
-
     // Collect data from the result
     for (PPRecognizerResult *result in results) {
 
-        if ([result isKindOfClass:[PPDetectorRecognizerResult class]] && self.nricNumber != nil && self.documentImage != nil) {
+        if ([result isKindOfClass:[PPDetectorRecognizerResult class]]) {
 
-            /** This is where we handle the success case. We have everything we need */
-
-            // self.nricNumber is the value of the NRIC number
-            // self.documentImage is the image
-
-            message = self.nricNumber;
-            title = @"Scanning done";
-        }
-
-        if ([result isKindOfClass:[PPBarcodeRecognizerResult class]]) {
-            PPBarcodeRecognizerResult *barcodeResult = (PPBarcodeRecognizerResult *)result;
-
-            NSString *val = [barcodeResult stringUsingGuessedEncoding];
-
-            if ([val length] == 9) {
-                self.nricNumber = val;
-            }
+            PPDetectorRecognizerResult *detectorResult = (PPDetectorRecognizerResult *)result;
+            self.nricNumber = [detectorResult parsedResultForName:self.nricInfoName parserGroup:self.nricInfoName];
         }
     };
 
-    if (message != nil && title != nil) {
+    if (self.nricNumber != nil && self.documentImage) {
         // present the alert view with scanned results
         UIAlertView *alertView =
-            [[UIAlertView alloc] initWithTitle:title message:message delegate:self cancelButtonTitle:@"OK" otherButtonTitles:nil];
+            [[UIAlertView alloc] initWithTitle:@"NRIC number" message:self.nricNumber delegate:self cancelButtonTitle:@"OK" otherButtonTitles:nil];
         [alertView show];
     } else {
         [scanningViewController resumeScanningAndResetState:NO];
